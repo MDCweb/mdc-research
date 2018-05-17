@@ -1,0 +1,3 @@
+name = MDC Research Helper
+description = Provide custom functions for the research website
+core = 7.x

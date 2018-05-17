@@ -1,0 +1,5 @@
+name = Moderate Term References
+description = Add moderation to a taxonomy term reference field.
+core = 7.x
+dependencies[] = taxonomy
+dependencies[] = og

@@ -1,0 +1,111 @@
+<?php
+
+/**
+ * Custom field formatter for researcher vocabulary
+ */
+function mdc_research_helper_field_formatter_info() {
+  return array(
+    'person_list' => array(
+      'label' => t('MDC Person List'),
+      'field types' => array('entityreference'),
+    ),
+  );
+}
+
+/**
+ * Display research name (first name field + term name field) in list format
+ */
+function mdc_research_helper_field_formatter_view($entity_type, $entity, $field, $instance, $langcode, $items, $display) {
+  $settings = $display['settings'];
+  $element = array();
+  $list_items = array();
+
+  if ($display['type'] == 'person_list') {
+    foreach ($items as $delta => $item) {
+      $term = taxonomy_term_load($item['target_id']);
+      $list_items[$delta] = $term->field_first_name['und'][0]['value'] . ' ' . $term->name;
+    }
+  }
+
+  $element[0] = array(
+    '#theme' => 'item_list',
+    '#type' => 'ul',
+    '#items' => $list_items,
+    '#attributes' => array(
+      'class' => 'person-list',
+    ),
+  );
+
+  return $element;
+}
+
+/**
+ * Clone a new node (story, presentation, paper, dataset) parent's topics and tags.
+ * MUST have node hierarchy module to work
+ */
+function mdc_research_helper_form_node_form_alter(&$form, $form_state, $form_id) {
+  //Want to inherit the parent node's topics and tags if creating a child story, presentation, paper, or dataset
+  switch ($form_id) {
+    case 'dkan_data_story_node_form' :
+    case 'presentation_node_form':
+    case 'paper_node_form':
+    case 'dataset_node_form':
+      //Only setting to parent's values if it is a new node form (i.e. the nid will be null)
+      if (is_null($form['nid']['#value'])) {
+        //Can only set to parent values if there is a parent
+        if (isset($form['#node']->nodehierarchy_parents[0]->pnid)) {
+          $parentnid = $form['#node']->nodehierarchy_parents[0]->pnid;
+          $parent = node_load($parentnid);
+          //The term reference topic field (select list) expects a default_value in array format
+          $topic_array = array();
+          foreach ($parent->field_topic['und'] as $topic) {
+            $topic_array[] = $topic['tid'];
+          }
+          //The term reference tag field (autofill) expects a default_value in string format
+          $tag_string = '';
+          $tag_count = 0;
+          foreach ($parent->field_tags['und'] as $tag) {
+             $tag_term = taxonomy_term_load($tag['tid']);
+             if ($tag_count == 0) {
+               $tag_string = $tag_term->name;
+               $tag_count = 1;
+             }
+             else {
+               $tag_string .= ', ' . $tag_term->name;
+             }
+          }
+          dpm($form['field_topic']);
+          dpm($topic_array);
+          $form['field_topic']['und']['#default_value'] = $topic_array;
+          $form['field_tags']['und']['#default_value'] = $tag_string;
+        }
+      }
+      break;
+  }
+}
+
+/**
+ * Remove Read More link in dataset child view displayed on project pages
+ */
+function mdc_research_helper_node_view($node, $view_mode, $langcode) {
+  if (($view_mode=='child_dataset') && ($node->type == 'dataset')) {
+    if (isset($node->content['links']['node']['#links']['node-readmore'])) {
+      unset($node->content['links']['node']['#links']['node-readmore']);
+    }
+    $node->content['body']['#weight'] = '-10';
+    $node->content['resources'] = array(
+      '#type' => 'item',
+      '#theme' => 'dkan_dataset_resource_teaser_view',
+      '#node' => $node,
+      '#enabled' => TRUE,
+      '#title' => '',
+      '#label_display' => 'above',
+      '#prefix' => '<div class="data-and-resources">',
+      '#suffix' => '</div>',
+      '#weight' => '20',
+    );
+    if (isset($node->content['field_topic'])) {
+      $node->content['field_topic']['#weight'] = '5';
+    }
+  }
+}

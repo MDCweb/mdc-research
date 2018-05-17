@@ -1,0 +1,73 @@
+<?php
+
+/**
+ * @file
+ * Implementation of hook_schema().
+ */
+function modterms_schema() {
+  $schema['modterms'] = array(
+    'description' => 'Modterms module table: Store suggestions for free-tagging fields.',
+    'fields' => array(
+      'mtid' => array(
+        'type' => 'serial',
+        'unsigned' => 1,
+        'not null' => TRUE,
+        'description' => 'The Modterms tag ID.'
+      ),
+      'nid' => array(
+        'type' => 'int',
+        'unsigned' => 1,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Node ID.'
+      ),
+      'vid' => array(
+        'type' => 'int',
+        'unsigned' => 1,
+        'not null' => TRUE,
+        'default' => 0,
+        'description' => 'Vocabulary ID.'
+      ),
+      'name' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'Suggestion string.'
+      ),
+      'fname' => array(
+        'type' => 'varchar',
+        'length' => 255,
+        'not null' => TRUE,
+        'default' => '',
+        'description' => 'Term reference field'
+      )
+    ),
+    'indexes' => array(
+      'nid' => array('nid'),
+      'name' => array('name'),
+      'fname' => array('fname')
+    ),
+    'primary key' => array('mtid')
+  );
+
+  return $schema;
+}
+
+function modterms_update_7100() {
+  db_add_field('modterms', 'uid', array(
+    'type' => 'int',
+    'unsigned' => 1,
+    'not null' => TRUE,
+    'default' => 0,
+    'description' => 'User ID.'
+  ));
+}
+
+
+/**
+ * Implementation of hook_uninstall().
+ */
+function modterms_uninstall() {
+  //TO DO: remove the module variables.
+}

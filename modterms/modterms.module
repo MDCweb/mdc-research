@@ -1,0 +1,176 @@
+<?php
+
+/**
+ * @file
+ *   Modterms module: Alter taxonomy term reference field to allow moderation
+ *   of terms added in autocomplete fields, free tagging.
+ * @author
+ *   Chris Cloyd [ http://drupal.org/user/183144 ].
+ * @internal
+ *   - Consider implementing a "ban" table.
+ */
+
+module_load_include('inc', 'modterms', 'modterms.admin');
+
+function modterms_menu() {
+  $items = array();
+
+  $items['admin/modterms/manage'] = array(
+    'title' => 'Term Manager',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => array('modterms_manage_suggestions_form'),
+    'access arguments' => array('moderate terms'),
+    'type' => MENU_NORMAL_ITEM,
+    'file' => 'modterms.admin.inc'
+  );
+
+  return $items;
+}
+
+function modterms_permission() {
+  return array(
+    'moderate terms' => array(
+      'title' => t('Approve and deny taxonomy terms.'),
+      'description' => t('Approve and deny taxonomy terms through the modterms module.')
+    ),
+  );
+}
+
+function modterms_field_info_alter(&$info) {
+  if (isset($info['taxomony_term_reference'])) {
+    $info['taxomony_term_reference']['settings'] += array('modterms_setting' => '');
+  }
+}
+
+function modterms_form_field_ui_field_edit_form_alter(&$form, &$form_state, $form_id) {
+  if ($form['#field']['type'] == 'taxonomy_term_reference') {
+    $form['field']['settings']['modterms_setting'] = array(
+      '#type' => 'checkbox',
+      '#title' => t('Enable moderation of new terms added.'),
+      '#description' => t('Limit free-tagging to existing terms only. Any suggested terms will be stored in a moderation queue and can be managed from the <em>Manage suggestions</em> tab.'),
+      '#default_value' => $form['#field']['settings']['modterms_setting'],
+    );
+  }
+}
+
+function modterms_form_alter(&$form, &$form_state, $form_id) {
+  //D7 each content type has unique node form id, but all contain node-form
+  if (strpos($form['#id'], 'node-form') !== FALSE) {
+    // Insert validation handler where the tags can be managed.
+    $form['#validate'][] = 'modterms_node_form_validate';
+  }
+}
+
+//Insert a new validation function so the moderate taxonomy term fields can add necessary terms to approval queue
+function modterms_node_form_validate($form, &$form_state) {
+  global $user;
+  //object_log('modterms node validate form', $form);
+  //object_log('modterms node validate form state', $form_state);
+  if ($form_state['values']['op'] == t('Save')) {
+    foreach ($form_state['field'] as $name => $field) {
+      if ($field['und']['field']['type'] == 'taxonomy_term_reference') {
+        //configured to only work with standard autocomplete widget
+        //TO DO add support for other taxonomy autocomplete widgets (autocomplete deluxe)
+        if (($field['und']['instance']['widget']['type'] == 'taxonomy_autocomplete') && (!user_access('moderate terms'))) {
+          if (isset($field['und']['field']['settings']['modterms_setting'])) {
+            if ($field['und']['field']['settings']['modterms_setting'] == '1') {
+              $modfield = $form_state['values'][$name];
+
+              $nid = $form_state['values']['nid'];
+              //New nodes will not have an nid. Need to handle (see _node_insert function above)
+              if (is_null($nid)) {
+                $nid = 0; //need to set a dummy value so don't throw error when adding to modterms table
+                variable_set('modterms_new_node', TRUE); //setting flag to check after node is inserted
+              }
+              else {
+                variable_set('modterms_new_node', FALSE);
+              }
+              $overwrite = array(); //stores terms already in system, will rewrite field with this array
+              $newterms = array();  //store new term titles that will be displayed in message
+              $inqueue = array();   //stores new terms already added to approval queue to display in message
+              $newnodeterms = array(); //stores modterm id for new terms that will be stored in approval queue database
+              foreach ($modfield['und'] as $key => $term) {
+                $vocab = $term['vocabulary_machine_name'];
+                $vid = $term['vid'];
+                $tname = $term['name'];
+                $tid = $term['tid'];
+                //See if term is new, won't have a TID in form_state
+                if ($tid == 'autocreate') {
+                  $newterm = modterms_add_term($nid, $vid, $tname, $name, $user->uid);
+                  if ($newterm) {
+                    array_push($newterms, $tname); //keep track of terms to display message later
+                    array_push($newnodeterms, $newterm); //keep track of modterm ids so can add nid later
+                  }
+                  else {
+                    array_push($inqueue, $tname);
+                  }
+                }
+                else {
+                  array_push($overwrite, $tid);
+                }
+              }
+              //setting variable of new terms of a new node to use in node insert
+              if (!empty(array_filter($newnodeterms))) {
+                variable_set('modterms_new_node_new_terms', $newnodeterms);
+              }
+              else {
+                variable_set('modterms_new_node_new_terms', '');
+              }
+              //resetting the vocab fields values with only ones already in system
+              $form_state['values'][$name] = '';
+              for ($i=0; $i<count($overwrite); $i++) {
+                $form_state['values'][$name][LANGUAGE_NONE][$i]['tid'] = $overwrite[$i];
+              }
+              if (count ($newterms)) {
+                foreach ($newterms as $newtrm) {
+                  drupal_set_message(t('Term "%string" has been sent for approval.', array('%string' => $newtrm)));
+                }
+                //send notification to site managers
+                modterms_notify_approver();
+              }
+              if (count($inqueue)) {
+                foreach ($inqueue as $trm) {
+                  drupal_set_message(t('Term "%string" is already in queue for approval.', array('%string' => $trm)));
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+function modterms_add_term($nid, $vid, $name, $fname, $uid) {
+  //double check to see if term is already in queue for approval
+  //right now only checking and dropping, would be nice if could record the nid so when approved it gets attached to all nodes that have entered the term
+  //TO DO record additional nid for term that is already in queue for approval
+  $exist = db_query('SELECT mtid FROM {modterms} WHERE vid = :vid AND name = :name', array(':vid' => $vid, ':name' => $name))->fetchField();
+  if ($exist) {
+    return 0;
+  }
+  else {
+    $mtid = db_insert('modterms')->fields(array('nid' => $nid, 'vid' => $vid, 'name' => $name, 'fname' => $fname, 'uid' => $uid)) -> execute();
+    return $mtid;
+  }
+}
+
+//If node was new when term added, then the new term was droppped before saving.
+//Need to cycle threw the "new" terms and update entries in modterms table to include the node id of the new node now that it is created.
+function modterms_node_insert($node) {
+  //Need to ensure the new node flag is set to TRUE, and grab the new modterm ids so can assign the nid in the table
+  $newnode = variable_get('modterms_new_node', FALSE);
+  $newterms = variable_get('modterms_new_node_new_terms', '');
+
+  if ($newnode && ($newterms != '')) {
+    $nid = $node->nid;
+    foreach ($newterms as $modtermid) {
+      modterms_update_nid($nid, $modtermid);
+    }
+  }
+}
+
+//Called by hook_node_insert above to upate the modterm database row with the newly created node's nid
+function modterms_update_nid($nid, $mtid) {
+  db_update('modterms')->fields(array('nid' => $nid))->condition('mtid', $mtid)->execute();
+}
